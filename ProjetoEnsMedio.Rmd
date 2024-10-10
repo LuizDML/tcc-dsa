@@ -1,0 +1,1554 @@
+```{r instalar e carregar pacotes}
+  # instalação de pacotes
+  # install.packages(c("DALEX", "vip", "shapper", "tidyverse", "lubridate", "janitor", "dplyr", "xlsx", "stringr", "tidyr", "plotly", "keras", "fastDummies", "tensorflow"))
+  
+  library("keras")
+  library("tensorflow")
+  library("DALEX")
+  library("vip")
+  library("shapper")
+  library("fastDummies")
+  library("keras")
+  library("tidyr")
+  library("lubridate")
+  library("ggplot2")
+  library("janitor")
+  library("knitr")
+  library("dplyr")
+  library("xlsx")
+  library("stringr")
+  library("plotly")
+
+  # mudei o ambiente do python via preferencias globais do RStudio - no caso coloquei num ambiente virtual   
+  # install_tensorflow()
+  # install_keras()
+```
+
+Algumas das tabelas tem só o código administrativo ao invés do código da escola, então criei uma tabela com esses dois códigos para poder inserir o código da escola nas tabelas que não tiverem, isso fará que o merge entre tabelas seja facilitrado futuramente
+
+```{r tabela com codigo adm e codigo da escola}
+
+  # carregando essa tabela só porque tem o cod adm e o cod_esc
+  codigos <- read.csv("Outros/MIEST CICLO - 08 2024.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+
+  excluir <- c("COD_UNID_ADM", "CODESC")
+  codigos <- codigos[,(names(codigos)%in% excluir)]
+  
+```
+
+Carregar as diversas tabelas, a intenção é criar um dataset único com todos os dados que precisamos
+
+Das tabelas de formação de funcionários (Base_Formacao) extrairemos apenas o QM (Quadro do Magistério), o que correponde aos professores, e cuja cargo seja de professor de ensino médio (6409 e 5774).
+
+Também será necessário categorizar a formação nesse dataset e como há tabelas diversas com a base de formação ao longo do tempo, há de se verificar se a estrutura delas é a mesma e colocar os dados de formações em colunas temporais e/ou verificar se houve mudança (evolução) na formação do profissional
+
+Um novo dataset será organizado com as informações: CodEscola \| CodCargo \| Cat \| Formacao
+
+Vale lembrar que os datasets do governo são mensais, mas aqui vamos selecionar apenas um mês por ano, já que mudanças relevantes na formação não acontecem em períodos tão curtos de tempo, no caso o mês escolhido foi o mês de dezembro.
+
+### Carregando os datasets da BASE_Formacao
+
+```{r carregar datasets da base_formacao}
+
+  base_formac1218 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1218].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  base_formac1219 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1219].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  base_formac1220 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1220].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  base_formac1221 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1221].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  base_formac1222 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1222].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  base_formac1223 <- read.csv("BaseFormacao/[dbo].[BASE_FORMACAO_1223].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  
+```
+
+### Analisando as colunas e vendo se elas são consistentes entre os arquivos de BASE_Formacao
+
+```{r verificar a consistência}
+    janitor::compare_df_cols(base_formac1218, 
+                             base_formac1219,
+                             base_formac1220,
+                             base_formac1221,
+                             base_formac1222,
+                             base_formac1223)
+
+```
+
+Pontos importantes:
+
+-   Haviam colunas com nomes de 'id_interno' e 'ID_INTERNO', optei por fazer a correção diretamente nos arquivos e carreguei novamente - se houver tempo habil mudar essa parte para corrigir tudo via R afim de aumentar a reprodutibilidade
+-   A base de 2018 tem a coluna Formação apenas com "Licenciatura" no caso do profissional ter formação em Licenciatura, diferente dos anos sequentes onde é especificado se é "Licenciatura-Plena" ou "Licenciatura-Curta"
+
+Para efeitos de facilitar a análise e verificar se houve evolução ou não, consideraremos licenciatura, independente de plena ou curta, como licenciatura.
+
+### Alterar os dataframes para excluir colunas indesejadas, renomear outras e deixar apenas dados necessários
+
+```{r unir e transformar os dados da Base Formacao}
+   
+  # Renomear colunas CATEG_E, FORMACAO e CIE_ESCOLA do segundo dataset
+  base_formac1218 <- base_formac1218 %>%
+    rename(Cat1218 = CATEG_E, For1218 = FORMACAO, CODESC = CIE_ESCOLA)
+
+  base_formac1219 <- base_formac1219 %>%
+    rename(Cat1219 = CATEG_E, For1219 = FORMACAO, CODESC = CIE_ESCOLA)
+  
+  base_formac1220 <- base_formac1220 %>%
+    rename(Cat1220 = CATEG_E, For1220 = FORMACAO, CODESC = CIE_ESCOLA)
+  
+  base_formac1221 <- base_formac1221 %>%
+    rename(Cat1221 = CATEG_E, For1221 = FORMACAO, CODESC = CIE_ESCOLA)
+  
+  base_formac1222 <- base_formac1222 %>%
+    rename(Cat1222 = CATEG_E, For1222 = FORMACAO, CODESC = CIE_ESCOLA)
+  
+  base_formac1223 <- base_formac1223 %>%
+    rename(Cat1223 = CATEG_E, For1223 = FORMACAO, CODESC = CIE_ESCOLA)
+  
+  base_formac18a23 <- list(base_formac1218, base_formac1219, base_formac1220, base_formac1221, base_formac1222, base_formac1223)
+  base_formac18a23c <- c("base_formac1218", "base_formac1219", "base_formac1220", "base_formac1221", "base_formac1222", "base_formac1223")
+  
+  # Loop aplicando a função simplificar 
+  for (nome in base_formac18a23c) {
+      df <- get(nome) %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+      
+      # Sobrescrever o data frame com o mesmo nome
+      assign(nome, df, envir = .GlobalEnv)
+  }
+  
+  # coloquei dentro do for acima pra ficar mais organizado
+  #
+  # # filtrar apenas cargos relevantes dos datasets
+  # base_formac1218 <- base_formac1218 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  # base_formac1219 <- base_formac1219 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  # base_formac1220 <- base_formac1220 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  # base_formac1221 <- base_formac1221 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  # base_formac1222 <- base_formac1222 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  # base_formac1223 <- base_formac1223 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  
+  # Função para merge recursivo
+  merge_all_bf <- function(df_list, by = "ID_INTERNO") {
+    if (length(df_list) == 1) {
+      return(df_list[[1]])
+    } else {
+      merged <- df_list[[1]]
+      for (i in 2:length(df_list)) {
+        sufixo_atual <- paste0("_df", i - 1) # Define sufixos dinamicamente
+        merged <- merge(merged, df_list[[i]], by = by, all = TRUE, suffixes = c("", sufixo_atual))
+        # Usar coalesce para combinar as colunas, mantendo dados de df1 quando disponíveis
+        merged <- merged %>%
+          mutate(
+            REGIAO_EXERC = coalesce(merged[[paste0("REGIAO_EXERC", sufixo_atual)]], merged[["REGIAO_EXERC"]]),
+            DE_EXERC = coalesce(merged[[paste0("DE_EXERC", sufixo_atual)]], merged[["DE_EXERC"]]),
+            CIE_ESCOLA = coalesce(merged[[paste0("CODESC", sufixo_atual)]], merged[["CODESC"]]),
+            UA_EXERC = coalesce(merged[[paste0("UA_EXERC", sufixo_atual)]], merged[["UA_EXERC"]]),
+            NOME_UA_EXERC = coalesce(merged[[paste0("NOME_UA_EXERC", sufixo_atual)]], merged[["NOME_UA_EXERC"]]),
+            MUNICIPIO_EXERC = coalesce(merged[[paste0("MUNICIPIO_EXERC", sufixo_atual)]], merged[["MUNICIPIO_EXERC"]]),
+            DI = coalesce(merged[[paste0("DI", sufixo_atual)]], merged[["DI"]]),
+            QUADRO_C = coalesce(merged[[paste0("QUADRO_C", sufixo_atual)]], merged[["QUADRO_C"]]),
+            CARGO_C = coalesce(merged[[paste0("CARGO_C", sufixo_atual)]], merged[["CARGO_C"]]),
+            NM_CARGO_C = coalesce(merged[[paste0("NM_CARGO_C", sufixo_atual)]], merged[["NM_CARGO_C"]]),
+            CATEG_C = coalesce(merged[[paste0("CATEG_C", sufixo_atual)]], merged[["CATEG_C"]]),
+            QUADRO_E = coalesce(merged[[paste0("QUADRO_E", sufixo_atual)]], merged[["QUADRO_E"]]),
+            CARGO_E = coalesce(merged[[paste0("CARGO_E", sufixo_atual)]], merged[["CARGO_E"]]),
+            NMCARGO_E = coalesce(merged[[paste0("NMCARGO_E", sufixo_atual)]], merged[["NMCARGO_E"]])
+            ) %>%
+          select(
+            -matches(paste0("REGIAO_EXERC", sufixo_atual)), 
+            -matches(paste0("DE_EXERC", sufixo_atual)), 
+            -matches(paste0("CODESC", sufixo_atual)), 
+            -matches(paste0("UA_EXERC", sufixo_atual)), 
+            -matches(paste0("MUNICIPIO_EXERC", sufixo_atual)), 
+            -matches(paste0("DI", sufixo_atual)), 
+            -matches(paste0("QUADRO_C", sufixo_atual)), 
+            -matches(paste0("CARGO_C", sufixo_atual)), 
+            -matches(paste0("NM_CARGO_C", sufixo_atual)), 
+            -matches(paste0("CATEG_C", sufixo_atual)), 
+            -matches(paste0("QUADRO_E", sufixo_atual)), 
+            -matches(paste0("NMCARGO_E", sufixo_atual)), 
+            -matches(paste0("Cat1218", sufixo_atual)), # antigo CATEG_E
+            -matches(paste0("CARGO_E", sufixo_atual)), 
+            -matches(paste0("Cat1219", sufixo_atual)), 
+            -matches(paste0("Cat1220", sufixo_atual)), 
+            -matches(paste0("Cat1221", sufixo_atual)), 
+            -matches(paste0("Cat1222", sufixo_atual)), 
+            -matches(paste0("Cat1223", sufixo_atual)),
+            -matches(paste0("For1218", sufixo_atual)), # antigo FORMACAO
+            -matches(paste0("For1219", sufixo_atual)), 
+            -matches(paste0("For1220", sufixo_atual)), 
+            -matches(paste0("For1221", sufixo_atual)), 
+            -matches(paste0("For1222", sufixo_atual)), 
+            -matches(paste0("For1223", sufixo_atual))) # Remove colunas adicionais
+      }
+      return(merged)
+    }
+  }
+  
+  # Aplicar a função de merge para unir todos os dataframes da lista
+  base_formac_all <- merge_all_bf(base_formac18a23, by = "ID_INTERNO")
+  
+  # Remover registros duplicados com base no ID_INTERNO
+  base_formac_all <- base_formac_all %>% distinct(ID_INTERNO, .keep_all = TRUE)
+  
+  # Exibir o resultado
+  head(base_formac_all)
+  
+
+```
+
+```{r renomeando dados das colunas de formação}
+
+    # # verificando os nomes e gerando uma lista
+    # formacoes <- base_formac1223 %>% 
+    #   filter(!is.na(For1223)) %>% 
+    #   count(For1223) 
+    # 
+    # formacoes
+    
+    # Função para remover o tipo de licenciatura e deixa apenas como licenciatura
+    simplificar_lic <- function(df) {
+      df <- df %>% 
+        mutate(across(starts_with("For12"), ~ gsub("-PLENA|-CURTA", "", .)))
+    }
+    
+    # Função para remover casos de duplicidade onde havia licenciatura plena + licenciatura curta
+    remover_dup_lic <- function(df) {
+      df <- df %>%
+        mutate(across(starts_with("For12"), ~ gsub("LICENCIATURA\\s*\\+\\s*LICENCIATURA", "LICENCIATURA", .)))
+    }
+      
+    # Função para abreviar os nomes das formações
+    abreviar_formacao <- function(df) {
+      df <- df %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*APERF/EXTENSÃO\\s*CULTURAL", "APERF", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("ESPECIALIZACAO\\s*POS\\s*MEDIO\\s*", "POSM", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("ENSINO\\s*FUNDAMENTAL", "EF", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*ENSINO\\s*MÉDIO\\s*", "EM", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\-\\s*TÉCNICO\\s*", "TEC", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*MESTRADO\\s*", "MES", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*TÉCNICO\\s*", "TEC", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*BACHARELADO/TECNÓLOGO\\s*", "BAC", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*ESPECIALIZAÇÃO\\s*", "POS", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*LICENCIATURA\\s*", "LIC", .))) %>%
+        mutate(across(starts_with("For12"), ~ gsub("\\s*DOUTORADO\\s*", "DOC", .))) 
+        
+      
+      return(df)
+    }
+    
+    # Loop aplicando a função simplificar 
+    for (nome in base_formac18a23c) {
+      assign(nome, simplificar_lic(get(nome)))  # Sobrescreve o dataframe original
+    }
+    
+    # Loop aplicando a função remover
+    for (nome in base_formac18a23c) {
+      assign(nome, remover_dup_lic(get(nome)))  # Sobrescreve o dataframe original
+    }
+    
+    # Loop aplicando a função abreviar
+    for (nome in base_formac18a23c) {
+      assign(nome, abreviar_formacao(get(nome)))  # Sobrescreve o dataframe original
+    }
+
+    
+    # # verificando quantos fatores existem
+    # base_formac1223 %>% 
+    #   filter(!is.na(For1223)) %>% 
+    #   count(For1223) 
+    
+  
+```
+
+```{r categorizando as formações}
+  
+  # Função para duplicar colunas que começam com "For12" e renomear para "categ_formac"
+  dup_col_formac <- function(df) {
+    df <- df %>%
+      mutate(across(starts_with("For12"), ~ ., .names = "categ_formac"))
+    return(df)
+  }
+
+  # Função para categorizar as formações
+   categorizar_formac <- function(df) {
+      df <- df %>%
+        mutate(across(starts_with("categ_for"), ~ case_when( 
+          . %in% c("APERF", "EF", "EM", "EM+POSM", "EMTEC", "EMTEC+POSM", "S/INFO", "POSM") ~ "Ensino Basico",
+          . %in% c("LIC", "LIC+BAC") ~ "Licenciatura",
+          . %in% c("BAC") ~ "Bacharelado",
+          . %in% c("LIC+POS", "LIC+BAC+POS", "BAC+POS", "POS") ~ "Pos Graduados",
+          . %in% c("BAC+MES", "BAC+MES+DOC", "BAC+POS+MES", "BAC+POS+MES+DOC", "BAC+DOC",
+                              "LIC+BAC+MES", "LIC+BAC+MES+DOC", "LIC+BAC+POS+MES", "LIC+BAC+DOC",
+                              "LIC+BAC+POS+MES+DOC", "LIC+BAC+POS+DOC", "LIC+MES", "LIC+MES+DOC", "LIC+MES+DOC", 
+                              "LIC+POS+MES", "LIC+POS+MES+DOC", "LIC+POS+DOC", "LIC+DOC", "LIC+BAC+DOC", 
+                              "LIC+POS+MES", "MES", "MES+DOC", "DOC") ~ "Mestres/Doutores"#,
+          #TRUE ~ "Outra"  # Para valores que não estejam categorizados (opcional)
+      )))
+      return(df)
+   } 
+   
+  # Loop aplicando a função duplicar a categoria - sim é uma gambiarra, não consegui fazer numa função só
+  for (nome in base_formac18a23c) {
+    assign(nome, dup_col_formac(get(nome)))  # Sobrescreve o dataframe original
+  }
+
+  # Loop aplicando a função categorizar
+  for (nome in base_formac18a23c) {
+    assign(nome, categorizar_formac(get(nome)))  # Sobrescreve o dataframe original
+  }
+    
+```
+
+```{r categoria de formação por ano}
+
+  categ_all <- c("categ18", "categ19", "categ20", "categ21", "categ22", "categ23")
+  
+  # Loop para criar os dataframes com dados da categoria e formação
+  for (i in seq_along(categ_all)) {
+    base <- get(base_formac18a23c[i])
+    categ <- base %>%
+      group_by(CODESC) %>%
+      summarise(
+        #TOTAL_PROFS = n(),
+        ENS_BASICO = sum(categ_formac == "Ensino Basico"),
+        LICENCIATURA = sum(categ_formac == "Licenciatura"),
+        BACHAREL = sum(categ_formac == "Bacharelado"),
+        POS_GRAD = sum(categ_formac == "Pos Graduados"),
+        MESTRES_DOCS = sum(categ_formac == "Mestres/Doutores"),
+        CAT_A = sum(across(starts_with("Cat12")) == "A"),
+        CAT_F = sum(across(starts_with("Cat12")) == "F"),
+        CAT_P = sum(across(starts_with("Cat12")) == "P"),
+        CAT_O = sum(across(starts_with("Cat12")) == "O"),
+        CAT_N = sum(across(starts_with("Cat12")) == "N"),
+        P_MD = round(MESTRES_DOCS / n() * 100, 2),
+        P_POSGRAD = round((MESTRES_DOCS + POS_GRAD) / n() * 100, 2)
+      )
+    
+    assign(categ_all[i], categ)  # Salva como dataframe no ambiente global
+  }
+
+  colSums(categ18, na.rm=TRUE)
+  colSums(categ19, na.rm=TRUE)
+  colSums(categ20, na.rm=TRUE)
+  colSums(categ21, na.rm=TRUE)
+  colSums(categ22, na.rm=TRUE)
+  colSums(categ23, na.rm=TRUE)
+  
+  # Antiga abordagem, fora do loop, rodando uma vez pra cada ano. 
+  # # Agrupando por empresa (CODESC) e calculando totais e proporções
+  # categ18 <- base_formac1218 %>%
+  #   group_by(CODESC) %>%
+  #   summarise(
+  #     TOTAL_PROFS = n(),  # Número total de professores por escola
+  #     ENS_BASICO = sum(categ_formac == "Ensino Basico"),
+  #     LICENCIATURA = sum(categ_formac == "Licenciatura"),
+  #     BACHAREL = sum(categ_formac == "Bacharelado"),
+  #     POS_GRAD = sum(categ_formac == "Pos Graduados"),
+  #     MESTRES_DOCS = sum(categ_formac == "Mestres/Doutores"),
+  #     CAT_A = sum(Cat1218 == "A"),
+  #     CAt_F = sum(Cat1218 == "F"),
+  #     CAT_P = sum(Cat1218 == "P"),
+  #     CAT_O = sum(Cat1218 == "O"),
+  #     CAT_N = sum(Cat1218 == "N"),
+  #     # Calculando proporções
+  #     P_MD = round(MESTRES_DOCS / TOTAL_PROFS * 100, 2),
+  #     P_POSGRAD = round((MESTRES_DOCS + POS_GRAD) / TOTAL_PROFS * 100, 2)
+  #   )
+  # 
+  
+
+```
+
+```{r ajustar as colunas de informação e depois extrair os fatores}
+
+  base_formac_arquivo <- "BaseFormacao/base_formac_bq.csv"
+  
+  # Como há um tratamento intenso, rodei o tratamento uma vez e salvei uma arquivo já processado - evita processamento desnecessário
+  if (file.exists(base_formac_arquivo)) {
+    
+    # Se o arquivo existe, carrega os dados
+    base_formac <- read.csv(base_formac_arquivo, header=TRUE, sep = ",", stringsAsFactors=TRUE)
+    message("Arquivo já processado encontrado. Carregando os dados.") 
+    
+  } else {
+  
+    # removendo o tipo de licenciatura e deixa apenas como licenciatura
+    base_formac <- base_formac_all %>%
+    mutate(across(starts_with("For"), ~ gsub("-PLENA|-CURTA", "", .)))
+    
+    
+    # transformando em fatores
+    base_formac <- base_formac %>%
+      mutate(across(starts_with("For"), ~ as.factor(.)))
+    
+    # verificando quantos fatores existem
+    base_formac %>% 
+      filter(!is.na(For1223)) %>% 
+      count(For1223) 
+  }
+
+```
+
+Deixando licenciatura apenas como licenciatura deu um problema de ficar duplicado "Licenciatura + Licencitura" para os casos onde o profissional tinha licencitura plena e curta, resultando em 49 fatores, vamos eliminar esses fatores extras
+
+```{r arrumando erros gerados pelos filtros anteriores}
+
+  #base_formac <- apply(base_formac, abreviar_formacao)
+  #base_formac <- base_formac %>%
+  #  mutate(across(starts_with("For12"), ~ gsub("EM\\s*\\-\\s*TÉCNICO", "TEC", .))) %>%
+  #  mutate(across(starts_with("For12"), ~ gsub("EM\\s*\\-\\s*TÉCNICO\\s*\\+\\s*ESPECIALIZACAO\\s*\\POS\\s*\\MEDIO", "TEC+POSM", .))) 
+  
+  # Como há um tratamento intenso, rodei o tratamento uma vez e salvei um arquivo já processado - evita processamento desnecessário
+  if (file.exists(base_formac_arquivo)) {
+    
+    # Se o arquivo existe, carrega os dados
+    message("Arquivo já processado encontrado. Pular Etapa.") 
+    
+  } else {  
+    
+    message("Arquivo já processado não encontrado. Processando dados, pode demorar.") 
+
+    # arrumando casos onde anteriormente havia licenciatura plena + licencitaura curta
+    base_formac <- base_formac %>%
+      mutate(across(starts_with("For"), ~ gsub("LICENCIATURA\\s*\\+\\s*LICENCIATURA", "LICENCIATURA", .)))
+  
+    # os nomes dos fatores estão bem grandes, considerar abreviar, mas só se sobrar tempo
+    
+    # verificando quantos fatores existem
+    base_formac %>% 
+      filter(!is.na(For1223)) %>% 
+      count(For1223) 
+    
+    # colocar o código da escola nessa tabela de base formac
+    base_formac <- merge(base_formac, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+    
+    # filtrar apenas escolas de ens médio
+    base_formac <- merge(base_formac, idesp18, by.x = "CODESC", by.y = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  
+  }
+ 
+```
+
+### Evolução funcional por via acadêmica
+
+A intenção aqui é verificar quais os funcionários buscaram aperfeiçoamento dentro do período analisado, isso possibilitará a criação de um índice de evolução por via acadêmica por escola, um dos fatores a serem analisados futuramen te quando analisarmos se as escolas atingiram ou não o IDESP daquele ano.
+
+```{r criando um índice de evolução}
+
+  # Como há um tratamento intenso, rodei o tratamento uma vez e salvei um arquivo já processado - evita processamento desnecessário
+  if (file.exists(base_formac_arquivo)) {
+    
+    # Se o arquivo existe, carrega os dados
+    message("Arquivo já processado encontrado. Pular Etapa.") 
+    
+  } else {  
+    
+    message("Arquivo já processado não encontrado. Processando dados, pode demorar.") 
+
+    # Criar a coluna "EVOLUC" para identificar evolução na formação entre anos
+    base_formac <- base_formac %>%
+      rowwise() %>% 
+      mutate(EVOLUC = ifelse(
+        For1219 != For1218 | For1220 != For1219 | 
+        For1221 != For1220 | For1222 != For1221 | 
+        For1223 != For1222, 1, 0))
+  }
+
+```
+
+```{r remover NAs e filtrar apenas cargos necessários}
+  
+  # Como há um tratamento intenso, rodei o tratamento uma vez e salvei um arquivo já processado - evita processamento desnecessário
+  if (file.exists(base_formac_arquivo)) {
+    
+    # Se o arquivo existe, exibe mensagem
+    message("Arquivo já processado encontrado. Pular Etapa.") 
+    
+  } else {  
+    
+    message("Arquivo já processado não encontrado. Processando dados, pode demorar.") 
+  
+    # importante que seja rodado só depois do cálculo do índice de evolução, pra não criar falsas evoluções nos casos dos NAs  
+  
+    # Substituir NA por "NÃO PRESENTE" nas colunas de formação
+    base_formac <- base_formac %>%
+      mutate(across(starts_with("For"), ~ replace_na(., "NÃO PRESENTE")))
+  
+    # filtrar apenas cargos que interessam na análise
+    base_formac <- base_formac %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & QUADRO_C == 'QM')
+  }
+
+```
+
+```{r criar uma coluna de Histórico}
+    
+  # O CÓDIGO A SEGUIR LEVA MUITO TEMPO PARA PROCESSAR NO R, FIZ UPLOAD NO BIGQUERY E RODEI LÁ
+  # PARA EVITAR MAIORES DORES DE CABEÇA, VERIFICO SE JÁ EXISTE O ARQUIVO MODIFICADO NA PASTA, SE HOUVER
+  # CARREGO ELE AO INVES DE PROCESSAR TUDO NOVAMENTE
+
+  # pegando uma porção dos dados pra testar
+  # base_formac_teste <- base_formac_teste %>% head(100)
+  # verifiquei que está rodando, mas o processo é bem lento - 97s para 100 registros  
+
+
+  # Como há um tratamento intenso, rodei o tratamento uma vez e salvei um arquivo já processado - evita processamento desnecessário
+  if (file.exists(base_formac_arquivo)) {
+    
+    # Se o arquivo existe, exibe mensagem
+    message("Arquivo já processado encontrado. Pular Etapa.") 
+    
+  } else {   
+    
+    # Criar a coluna "Histórico" de acordo com as condições
+    message("Arquivo já processado não encontrado. Processando dados, pode demorar.") 
+    
+    base_formac <- base_formac %>%
+      rowwise() %>%
+      mutate(HISTORICO = case_when(
+        # Condição para "Ingressante" (NA nos primeiros anos e formação nos anos seguintes)
+        (For1218 == "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 != "NÃO PRESENTE") | 
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 != "NÃO PRESENTE") | 
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 != "NÃO PRESENTE") | 
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 != "NÃO PRESENTE") | 
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 != "NÃO PRESENTE") ~ "INGRESSANTE",
+        
+        # Condição para "Regular" (Formação em todos os anos)
+        For1218 != "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+        For1220 != "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+        For1222 != "NÃO PRESENTE" & For1223 != "NÃO PRESENTE" ~ "REGULAR",
+        
+        # Condição para "Desistente" (Formação nos anos iniciais e NA nos últimos anos)
+        (For1218 != "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 != "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 != "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 != "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 != "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") ~ "ABANDONO",
+        
+        # Condição para "Experiencia" (Formação em apenas um dos anos)
+        (For1218 == "NÃO PRESENTE" & For1219 != "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 != "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 != "NÃO PRESENTE" & 
+         For1222 == "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") |
+        (For1218 == "NÃO PRESENTE" & For1219 == "NÃO PRESENTE" & 
+         For1220 == "NÃO PRESENTE" & For1221 == "NÃO PRESENTE" & 
+         For1222 != "NÃO PRESENTE" & For1223 == "NÃO PRESENTE") ~ "EXPERIÊNCIA",
+        
+        # Condição para "Intermitente" (NAs e formações intercaladas)
+        TRUE ~ "INTERMITENTE"  # Qualquer outro caso cai em "Intermitente"
+      ))
+    }
+
+  # Visualizar o dataset com a nova coluna "HISTORICO"
+  head(base_formac)
+
+
+```
+
+```{r platando uns gráficos básicos}
+  
+  base_formac <- simplificar_lic(base_formac)
+  base_formac <- remover_dup_lic(base_formac)
+  base_formac <- abreviar_formacao(base_formac)
+
+  dados_long <- base_formac %>%
+    pivot_longer(cols = starts_with("For12"),
+                 names_to = "Ano",
+                 values_to = "Formação") %>%
+  mutate(ano = gsub("For12", "", Ano))
+
+  head(dados_long)
+  
+  # Gráfico de barras para o ano de 2018
+  dados_long %>%
+   filter(ano == 18) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2018)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+  
+  # Gráfico de barras para o ano de 2023
+  dados_long %>%
+   filter(ano == 19) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2019)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+  
+  # Gráfico de barras para o ano de 2020
+  dados_long %>%
+   filter(ano == 20) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2020)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+  
+  # Gráfico de barras para o ano de 2021
+  dados_long %>%
+   filter(ano == 21) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2021)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+  
+  # Gráfico de barras para o ano de 2022
+  dados_long %>%
+   filter(ano == 22) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2022)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+  
+  # Gráfico de barras para o ano de 2023
+  dados_long %>%
+   filter(ano == 23) %>%
+    ggplot(aes(x = Formação)) +
+    geom_bar() +
+    theme_minimal() +
+    labs(title = "Quantidade de profissionais por formação (2023)", x = "Formação", y = "Quantidade") +
+    coord_flip()  # Para deixar o gráfico na horizontal (opcional)
+
+  # Gráfico de linhas para a evolução da formação ao longo dos anos
+  dados_long %>%
+  group_by(ano, Formação) %>%
+  summarise(quantidade = n()) %>%
+  ggplot(aes(x = ano, y = quantidade, color = Formação, group = Formação)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(title = "Evolução da formação dos profissionais de 2018 a 2023",
+       x = "Ano",
+       y = "Quantidade de profissionais",
+       color = "Formação",
+       legend.position="bottom")
+  
+  # Gráfico de barras interativo para o ano de 2023
+  dados_2018 <- dados_long %>%
+    filter(ano == 18) %>%
+    group_by(Formação) %>%
+    summarise(quantidade = n())
+
+  # Criando o gráfico de barras interativo com plotly
+  p0 <- plot_ly(data = dados_2018, 
+        x = ~Formação, 
+        y = ~quantidade, 
+        type = 'bar',
+        marker = list(color = 'rgba(55, 128, 191, 0.7)',
+                      line = list(color = 'rgba(55, 128, 191, 1.0)', width = 1.5))) %>%
+  layout(title = "Quantidade de profissionais por formação (2018)",
+         xaxis = list(title = "Formação"),
+         yaxis = list(title = "Quantidade"),
+         margin = list(l = 50, r = 50, t = 50, b = 100))
+  
+  p0
+  
+  # Criando o gráfico de linhas interativo com plotly
+  dados_evolucao <- dados_long %>%
+    group_by(ano, Formação) %>%
+    summarise(quantidade = n()) %>%
+    ungroup()
+
+  # Criando o gráfico de linhas com plotly
+  p <- plot_ly(data = dados_evolucao, 
+        x = ~ano, 
+        y = ~quantidade, 
+        color = ~Formação, 
+        type = 'scatter', 
+        mode = 'lines+markers') %>%
+  layout(title = "Evolução da formação dos profissionais de 2018 a 2023",
+         xaxis = list(title = "Ano"),
+         yaxis = list(title = "Quantidade de profissionais"),
+         margin = list(l = 50, r = 50, t = 50, b = 100))
+  
+  p
+  
+```
+
+```{r criando um dataframe com um íncide de evolução por escola}
+
+  # Calcular o índice de evolução por escola (CODESC)
+  indice_evolucao <- base_formac %>%
+    group_by(CODESC) %>%
+    summarise(
+      #TOTAL_PROFSi = n(),  # Número total de funcionários por empresa
+      PROFS_COM_EVOLUC = sum(!is.na(EVOLUC)),  # Número de funcionários que evoluíram
+      INDICE_EVOLUC = round((PROFS_COM_EVOLUC / n() * 100),2),  # Percentual de evolução
+      INGRESSANTES = sum(HISTORICO=="INGRESSANTE"), 
+      REGULARES = sum(HISTORICO =="REGULAR"), 
+      ABANDONOS = sum(HISTORICO =="DESISTENTE"), 
+      INTERMITENTES = sum(HISTORICO =="INTERMITENTE")
+    )
+  
+  # Visualizar o índice de evolução por empresa
+  head(indice_evolucao)
+
+
+```
+
+```{r gravando arquivo de base formacao}
+  
+  #gravando um csv para não ter de carregar tudo novamente
+  write.csv(base_formac, "BaseFormacao/base_formac.csv", row.names = FALSE)
+
+```
+
+```{r algumas análises a respeito das evoluções}
+  
+  #base_formac$HISTORICO[base_formac$HISTORICO == "DESISTENTE"] <- "ABANDONO" # desistente não era o melhor termo
+
+  # Movimentação de professores de 2018 a 2023
+  estabilidade <- base_formac %>%
+    group_by(HISTORICO) %>% 
+      summarise(
+      TOTAL_PROFS = n(),  # Número total de funcionários escola
+    )
+
+  # Criando o gráfico de barras interativo com plotly
+  estabilidade_graph <- plot_ly(data = estabilidade, 
+        x = ~HISTORICO, 
+        y = ~TOTAL_PROFS, 
+        type = 'bar',
+        marker = list(color = 'rgba(55, 128, 191, 0.7)',
+                      line = list(color = 'rgba(55, 128, 191, 1.0)', width = 1.5))) %>%
+  layout(title = "Ingressos x Estabilidade x Abandonos entre 2018 e 2023",
+         xaxis = list(title = ""),
+         yaxis = list(title = ""),
+         margin = list(l = 50, r = 50, t = 50, b = 100))
+  
+  estabilidade_graph
+  
+  message("Regulares = ", estabilidade[5,2], "  --> Professores de carreira \n",
+          "Ingressantes = ", estabilidade[3,2], "  --> Novos ingressantes: teve concurso em 2019 \n",
+          "Exoneração/Aposentadoria/Fim de contrato = ", estabilidade[1,2], "  --> Por algum motivo deixaram os cargos \n",
+          "Experíência = ", estabilidade[2,2], "  --> Iniciaram a carreira, mas abandonaram após um ano \n",
+          "Intermitentes = ", estabilidade[4,2], "  --> Flutuantes, provavelmente por contratos \n \n",
+          "Saldo (Ing - Aba - Exp) = ", estabilidade[3,2]-estabilidade[1,2]-estabilidade[2,2])
+
+```
+
+```{r carregando dados de Ausencias}
+  
+  # Setando o diretório pra facilitar
+  setwd("Ausencias")
+
+  # Carregar Lista de Arquivos
+  arquivos2018 <- list.files(path = "2018", pattern = "*.csv", full.names = TRUE)
+  arquivos2019 <- list.files(path = "2019", pattern = "*.csv", full.names = TRUE)
+  arquivos2020 <- list.files(path = "2020", pattern = "*.csv", full.names = TRUE)
+  arquivos2021 <- list.files(path = "2021", pattern = "*.csv", full.names = TRUE)
+  arquivos2022 <- list.files(path = "2022", pattern = "*.csv", full.names = TRUE)
+  arquivos2023 <- list.files(path = "2023", pattern = "*.csv", full.names = TRUE)
+  arquivos2024 <- list.files(path = "2024", pattern = "*.csv", full.names = TRUE)
+  
+  # Carrega todos os arquivos em uma lista
+  ausencias2018 <- lapply(arquivos2018, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2019 <- lapply(arquivos2019, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2020 <- lapply(arquivos2020, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2021 <- lapply(arquivos2021, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2022 <- lapply(arquivos2022, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2023 <- lapply(arquivos2023, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  ausencias2024 <- lapply(arquivos2024, read.csv, header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  
+  
+  # Função para extrair o mês/ano do nome do arquivo e adicionar uma coluna
+  adicionar_ano <- function(df, nome_arquivo) {
+    
+    # Extraindo a informação do ano do nome do arquivo
+  mes_ano <- sub("\\[dbo\\]\\.\\[BASE_AUSENCIAS_", "", sub("\\]\\.csv", "", nome_arquivo))
+    
+    # Adicionando a nova coluna ao dataset
+    df$MesAno <- mes_ano
+    return(df)
+  }
+
+  # Aplica a função para todos os datasets na lista
+  ausencias2018 <- mapply(adicionar_ano, ausencias2018, arquivos2018, SIMPLIFY = FALSE)
+  ausencias2019 <- mapply(adicionar_ano, ausencias2019, arquivos2019, SIMPLIFY = FALSE)
+  ausencias2020 <- mapply(adicionar_ano, ausencias2020, arquivos2020, SIMPLIFY = FALSE)
+  ausencias2021 <- mapply(adicionar_ano, ausencias2021, arquivos2021, SIMPLIFY = FALSE)
+  ausencias2022 <- mapply(adicionar_ano, ausencias2022, arquivos2022, SIMPLIFY = FALSE)
+  ausencias2023 <- mapply(adicionar_ano, ausencias2023, arquivos2023, SIMPLIFY = FALSE)
+  ausencias2024 <- mapply(adicionar_ano, ausencias2024, arquivos2024, SIMPLIFY = FALSE)
+  
+  # Unindo datasets mensais em um dataset anual
+  dados_ausencia2018 <- do.call(rbind, ausencias2018)
+  dados_ausencia2019 <- do.call(rbind, ausencias2019)
+  dados_ausencia2020 <- do.call(rbind, ausencias2020)
+  dados_ausencia2021 <- do.call(rbind, ausencias2021)
+  dados_ausencia2022 <- do.call(rbind, ausencias2022)
+  dados_ausencia2023 <- do.call(rbind, ausencias2023)
+  dados_ausencia2024 <- do.call(rbind, ausencias2024)
+  
+  
+```
+
+```{r comparar as colunas}
+
+    # Comparar as colunas dos df de dados ausencias antes do merge
+    janitor::compare_df_cols(dados_ausencia2022, 
+                             dados_ausencia2019,
+                             dados_ausencia2020,
+                             dados_ausencia2021,
+                             dados_ausencia2022,
+                             dados_ausencia2023,
+                             dados_ausencia2024)
+
+  #renomear as colunas da base de 2022 antes de fase o bind
+  dados_ausencia2018 <- rename(dados_ausencia2018, 
+                                CARGO_EXERC = CARGO_E, NOME_CARGO_EXERC = NOME_CARGO_E, MUNICIPIO_EXERC = MUNICIPIO_E, UA_EXERC = UA_E, TOT_DIAS_AUSENCIAS = TOT_AUSENCIAS, REGIAO_EXERC = REGIAO_E, NOME_UA_EXERC = NOMEUA_E, DE_EXERC = NOMEDE_E, QUADRO_EXERC = QUADRO_E)
+  
+  dados_ausencia2022 <- rename(dados_ausencia2022, 
+                                id_interno = ID_INTERNO)
+  
+  dados_ausencia2023 <- rename(dados_ausencia2023, 
+                                id_interno = ID_INTERNO)
+
+```
+
+```{r filtros e correções}
+  
+  # filtrar apenas cargos relevantes
+  dados_ausencia2018 <- dados_ausencia2018 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2019 <- dados_ausencia2019 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2020 <- dados_ausencia2020 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2021 <- dados_ausencia2021 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2022 <- dados_ausencia2022 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2023 <- dados_ausencia2023 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  dados_ausencia2024 <- dados_ausencia2024 %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  
+  # adicionar a coluna CODESC
+  dados_ausencia2018 <- merge(dados_ausencia2018, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2019 <- merge(dados_ausencia2019, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2020 <- merge(dados_ausencia2020, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2021 <- merge(dados_ausencia2021, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2022 <- merge(dados_ausencia2022, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2023 <- merge(dados_ausencia2023, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  dados_ausencia2024 <- merge(dados_ausencia2024, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+
+```
+
+```{r criar um dataset somando as ausências por escola}
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2018 <- dados_ausencia2018 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2019 <- dados_ausencia2019 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2020 <- dados_ausencia2020 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2021 <- dados_ausencia2021 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2022 <- dados_ausencia2022 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2023 <- dados_ausencia2023 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  dados_ausencia2024 <- dados_ausencia2024 %>%
+  group_by(CODESC) %>%
+  summarize(AUSENCIAS = sum(TOT_DIAS_AUSENCIAS, na.rm = TRUE))  
+
+
+```
+
+```{r criando um único dataset de ausencias e filtrando apenas dados relevantes da Ausencias}
+
+  #dados_ausencias_list <- list(dados_ausencia2018, dados_ausencia2019, dados_ausencia2020, dados_ausencia2021, dados_ausencia2022, dados_ausencia2023, dados_ausencia2024)
+
+  #dados_ausencias <- bind_rows(dados_ausencias_list)
+
+  #dados_ausencias_filtered <- dados_ausencias %>% filter((CARGO_EXERC == 6409 | CARGO_EXERC == 5774) & (QUADRO_EXERC == "QM-DOCENTE"))
+  #head(dados_ausencias_filtered)
+  
+  #gravando um csv para não ter de carregar tudo novamente
+  #write.csv(dados_ausencias, "Ausencias/ausencias.csv", row.names = FALSE)
+
+```
+
+```{r carregar os servidores por unidade}
+  
+  # arquivos de servidores por unidade, extrair quantidade (PROFESSORES), tempo no cargo (MD_ANOS_C) e média de idade (MD_IDADE)
+  serv_uni2018 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_1812].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2019 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_1912].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2020 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_2012].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2021 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_2112].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2022 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_2212].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2023 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_2312].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  serv_uni2024 <- read.csv("ServidoresPorUnidade/[dbo].[BASE_SERVIDORES_ATIVOS_2408].csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+
+```
+
+```{r arrumando o código da escola}
+
+  # colocar tudo em loops quando possível !!!
+  
+  # filtrar apenas cargos relevantes
+  serv_uni2018 <- serv_uni2018 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2019 <- serv_uni2019 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2020 <- serv_uni2020 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2021 <- serv_uni2021 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2022 <- serv_uni2022 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2023 <- serv_uni2023 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+  serv_uni2024 <- serv_uni2024 %>% filter((CARGO_E == 6409 | CARGO_E == 5774) & (QUADRO_E == "QM"))
+
+  # colocando a coluna CODESC
+  serv_uni2018 <- merge(serv_uni2018, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2019 <- merge(serv_uni2019, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2020 <- merge(serv_uni2020, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2021 <- merge(serv_uni2021, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2022 <- merge(serv_uni2022, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2023 <- merge(serv_uni2023, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  serv_uni2024 <- merge(serv_uni2024, codigos, by.x = "UA_E", by.y = "COD_UNID_ADM", sort = FALSE)
+  
+  # Rearrange columns and remove original name column
+  #serv_uni2022 <- serv_uni2022[c('TIPO', 'NOMEESC', 'State')]
+
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2018 <- serv_uni2018 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2019 <- serv_uni2019 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2020 <- serv_uni2020 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2021 <- serv_uni2021 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2022 <- serv_uni2022 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2023 <- serv_uni2023 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2)) 
+  
+  # Criando dataframes somente com as ausências por ano por escola.
+  serv_uni2024 <- serv_uni2024 %>%
+  group_by(CODESC) %>%
+  summarise(PROFESSORES = n(), MD_ANOS_C = round(mean(ANOS_TRAB_CARGO_C),2), MD_IDADE = round(mean(IDADE),2))  
+
+```
+
+```{r somar os docentes por categoria por escola}
+
+  # O CIE_ESCOLA foi renomeado para CODESC, eliminando a necessidade de realizar o merge nessas tabelas
+  # # colocando a coluna codesc no base_formacao 
+  # base_formac1218 <- merge(base_formac1218, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  # base_formac1219 <- merge(base_formac1219, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  # base_formac1220 <- merge(base_formac1220, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  # base_formac1221 <- merge(base_formac1221, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  # base_formac1222 <- merge(base_formac1222, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+  # base_formac1223 <- merge(base_formac1223, codigos, by.x = "UA_EXERC", by.y = "COD_UNID_ADM", sort = FALSE)
+
+
+  # # Agrupar por UA e contar os docentes categorias
+  # categ18 <- base_formac1218 %>%
+  # group_by(CODESC) %>%
+  # summarise(
+  #   #Professores = n(),
+  #   catA = sum(Cat1218 == "A"),
+  #   CatF = sum(Cat1218 == "F"),
+  #   CatP = sum(Cat1218 == "P"),
+  #   CatO = sum(Cat1218 == "O"),
+  #   CatN = sum(Cat1218 == "N")
+  # )
+  # 
+  # colSums(categ18, na.rm=TRUE)
+  # 
+  
+
+```
+
+```{r carregar os arquivos com notas do idesp}
+
+  # Arquivos brutos
+  idesp_em_2017a2019 <- read.csv("NotasIDESP\\IDESP_Escolas_2007_2019_EM.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  #idesp20 <- dados indisponiveis por conta da pandemia
+  idesp21 <- read.csv("NotasIDESP\\IDESP_ESCOLA_2021.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  idesp22 <- read.xlsx("NotasIDESP\\IDESP_ESCOLA_2022.xlsx", 1, header=TRUE)
+  #idesp23 <- read.csv("NotasIDESP\\IDESP_ESCOLA_2023_0.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE) sem dados do em por mudança de metricas
+
+```
+
+```{r limpar e organizar as tabelas do idesp}
+
+  # remover os anos que nao farao parte da analise
+  excluir <- c("X2007", "X2008", "X2009", "X2010", "X2011", "X2012", "X2013", "X2014", "X2015", "X2016")
+  idesp_em_2017a2019 <- idesp_em_2017a2019[,!(names(idesp_em_2017a2019)%in% excluir)]
+  
+  #criar os dataframes com os dados de 2017, 2018, 2019
+  idesp17 <- idesp_em_2017a2019[, -c(2,3,4,5,6,8,9)]
+  idesp18 <- idesp_em_2017a2019[, -c(2,3,4,5,6,7,9)]
+  idesp19 <- idesp_em_2017a2019[, -c(2,3,4,5,6,7,8)]
+
+  # remover colunas não utilizadas
+  idesp21 <- idesp21[, -c(1,3,4,5,6,7,8,9)]
+  idesp22 <- idesp22[, -c(1,3,4,5,6,7,8,9)]
+  
+  # renomear colunas
+  idesp17 <- rename(idesp17, CODIGO_IE = CODIGO.CIE, IDESP17 = X2017)
+  idesp18 <- rename(idesp18, CODIGO_IE = CODIGO.CIE, IDESP18 = X2018)
+  idesp19 <- rename(idesp19, CODIGO_IE = CODIGO.CIE, IDESP19 = X2019)
+  idesp21 <- rename(idesp21, CODIGO_IE = CODIGO_CIE, IDESP21 = ENSINO_MÉDIO)
+  idesp22 <- rename(idesp22, CODIGO_IE = CODIGO_CIE, IDESP22 = ENSINO_MEDIO)
+  
+  # remover NAs e nulos
+  idesp17 <- idesp17[!(is.na(idesp17$IDESP17) | idesp17$IDESP17==""), ]
+  idesp18 <- idesp18[!(is.na(idesp18$IDESP18) | idesp18$IDESP18==""), ]
+  idesp19 <- idesp19[!(is.na(idesp19$IDESP19) | idesp19$IDESP19==""), ]
+  idesp21 <- idesp21[!(is.na(idesp21$IDESP21) | idesp21$IDESP21==""), ]
+  idesp22 <- idesp22[!(is.na(idesp22$IDESP22) | idesp22$IDESP22==""), ]
+  
+  # transformando a coluna IDESP em numerica ao inves de fatores
+  idesp17 <- idesp17 %>%
+    mutate(IDESP17 = as.numeric(gsub(",", "", as.character(idesp17$IDESP17)))/100)
+  idesp18 <- idesp18 %>%
+    mutate(IDESP18 = as.numeric(gsub(",", "", as.character(idesp18$IDESP18)))/100)
+  idesp19 <- idesp19 %>%
+    mutate(IDESP19 = as.numeric(gsub(",", "", as.character(idesp19$IDESP19)))/100)
+  # idesp20 <- idesp20 %>%
+  #   mutate(IDESP20 = as.character(idesp20$IDESP20)) # não realizado por conta da pandemia
+  idesp21 <- idesp21 %>%
+    mutate(IDESP21 = as.numeric(gsub(",", "", as.character(idesp21$IDESP21)))/100)
+  
+  # str(idesp22)
+  # idesp22 <- idesp22 %>%
+  #   mutate(IDESP22 = as.numeric(gsub(",", "", as.character(idesp22$IDESP22)))) 
+  
+  
+```
+
+```{r carregar os arquivos com as metas do ideb}
+
+  # arquivos brutos
+  m_idesp17 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2017.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  m_idesp18 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2018.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  m_idesp19 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2019.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  m_idesp20 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2020.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  m_idesp21 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2021.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  m_idesp22 <- read.csv("MetasIDESP\\IDESP Metas por Escola - 2022.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+
+```
+
+```{r limpar e organizar tabela com metas para o idesp}
+
+  # removendo colunas desnecessárias
+  m_idesp17 <- m_idesp17[, -c(2,3,4,5,6,7)]
+  m_idesp18 <- m_idesp18[, -c(2,3,4,5,6,7)]
+  m_idesp19 <- m_idesp19[, -c(2,3,4,5,6,7)]
+  m_idesp20 <- m_idesp20[, -c(2,3,4,5,6,7)]
+  m_idesp21 <- m_idesp21[, -c(2,3,4,5,6,7)]
+  m_idesp22 <- m_idesp22[, -c(2,3,4,5,6,7)]
+  
+  # renomeando colunas
+  m_idesp17 <- rename(m_idesp17, CODIGO_IE = CÓDIGO.CIE, M_IDESP17 = ENSINO.MÉDIO)
+  m_idesp18 <- rename(m_idesp18, CODIGO_IE = CÓDIGO.CIE, M_IDESP18 = ENSINO.MÉDIO)
+  m_idesp19 <- rename(m_idesp19, CODIGO_IE = CODIGO.CIE, M_IDESP19 = ENSINO.MEDIO)
+  m_idesp20 <- rename(m_idesp20, CODIGO_IE = CODIGO.CIE, M_IDESP20 = ENSINO.MEDIO)
+  m_idesp21 <- rename(m_idesp21, CODIGO_IE = CODIGO.CIE, M_IDESP21 = ENSINO.MEDIO)
+  m_idesp22 <- rename(m_idesp22, CODIGO_IE = CODIGO.CIE, M_IDESP22 = ENSINO.MEDIO)
+  
+  # removendo na e campos em branco
+  m_idesp17 <- m_idesp17[!(is.na(m_idesp17$M_IDESP17) | m_idesp17$M_IDESP17==""), ]
+  m_idesp18 <- m_idesp18[!(is.na(m_idesp18$M_IDESP18) | m_idesp18$M_IDESP18==""), ]
+  m_idesp19 <- m_idesp19[!(is.na(m_idesp19$M_IDESP19) | m_idesp19$M_IDESP19==""), ]
+  m_idesp20 <- m_idesp20[!(is.na(m_idesp20$M_IDESP20) | m_idesp20$M_IDESP20==""), ]
+  m_idesp21 <- m_idesp21[!(is.na(m_idesp21$M_IDESP21) | m_idesp21$M_IDESP21==""), ]
+  m_idesp22 <- m_idesp22[!(is.na(m_idesp22$M_IDESP22) | m_idesp22$M_IDESP22==""), ]
+  
+  # transformando a coluna M_IDESP em numerica ao inves de fatores
+  m_idesp17 <- m_idesp17 %>%
+    mutate(M_IDESP17 = as.numeric(gsub(",", "", as.character(m_idesp17$M_IDESP17)))/100)
+  m_idesp18 <- m_idesp18 %>%
+    mutate(M_IDESP18 = as.numeric(gsub(",", "", as.character(m_idesp18$M_IDESP18)))/100)
+  m_idesp19 <- m_idesp19 %>%
+    mutate(M_IDESP19 = as.numeric(gsub(",", "", as.character(m_idesp19$M_IDESP19)))/100)
+  m_idesp20 <- m_idesp20 %>%
+    mutate(M_IDESP20 = as.numeric(gsub(",", "", as.character(m_idesp20$M_IDESP20)))/100)
+  m_idesp21 <- m_idesp21 %>%
+    mutate(M_IDESP21 = as.numeric(gsub(",", "", as.character(m_idesp21$M_IDESP21)))/100)
+  m_idesp22 <- m_idesp22 %>%
+    mutate(M_IDESP22 = as.numeric(gsub(",", "", as.character(m_idesp22$M_IDESP22)))/100)
+  # m_idesp23 <- m_idesp23 %>%
+  #   mutate(M_IDESP18 = as.character(m_idesp18$M_IDESP18)) # ainda não divulgado
+  
+  
+  
+```
+
+```{r carrega datase com anos de adesão da PEI}
+  
+  # carregar o dateset
+  escolas_pei <- read.xlsx2("PEI\\ESCOLAS_PEI_2024.xlsx", 1, header=TRUE)
+
+  # colunas que não fazem parte da analise
+  excluir <- c("ANO_ADESAO", "CODESC")
+  escolas_pei_adesao <- escolas_pei[,(names(escolas_pei)%in% excluir)]
+  
+  # unir com os códigos das outras escolas
+  # escolas_pei <- merge(escolas2018, idesp18, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+    
+
+```
+
+```{r carregar base de classes para obter média de alunos por turma por escola}
+
+  # carregar os datesets
+  classes15a20 <- read.csv("Matriculas\\Quantidade de Alunos por Escola e Classe 2015_2020.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  classes21a23 <- read.csv("Matriculas\\Quantidade de Alunos por Escola e Classe_2021_2023.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  classes_all <- rbind(classes15a20, classes21a23)
+  
+  #remover colunas que não importam para a análise
+  classes_all <- classes_all[, -c(2,3,4,5,7,8,9,10,11,18)]
+  
+  classes18a23 <- c("classes18", "classes19", "classes20", "classes21", "classes22", "classes23")
+  anos <- c(2018, 2019, 2020, 2021, 2022, 2023)
+  
+  # Função para abreviar os nomes das formações
+  media_at <- function(df, ano) {
+    
+    df <- df %>%
+      filter(
+      (ANO == ano) &
+      (TIPOCLASSE == 0 | TIPOCLASSE == 18 | TIPOCLASSE == 17) &
+        (GRAU == 101 | GRAU == 2 | GRAU ==  5 | GRAU == 93 | GRAU == 98 | GRAU == 63 | GRAU == 76 | GRAU == 109 | GRAU == 104 | GRAU == 108 )) %>%
+      
+      group_by(COD_ESC) %>%
+      
+      mutate(
+        TURMAS = n(),
+        T_ALUNOS = sum(QTDE_ALUNOS),
+        MD_ALUNOTURMA = round(T_ALUNOS/(n()),2)
+      ) %>% 
+       
+      select(COD_ESC, MD_ALUNOTURMA) %>%
+      
+      distinct()
+    
+    return(df)
+  }
+    
+  # Loop para aplicar a função em cada dataframe e respectivo ano
+  for (i in seq_along(anos)) {
+    # Obter o dataframe correspondente e o ano
+    ano_atual <- anos[i]
+    
+    # Aplicar a função 'media_at' no dataframe
+    df_resultado <- media_at(classes_all, ano_atual)
+    
+    # Salvar o resultado de volta na variável original
+    assign(classes18a23[i], df_resultado)
+  }
+  
+  # renomear colunas
+  classes18 <- rename(classes18, MD_AT18 = MD_ALUNOTURMA)
+  classes19 <- rename(classes19, MD_AT19 = MD_ALUNOTURMA)
+  classes20 <- rename(classes20, MD_AT20 = MD_ALUNOTURMA)
+  classes21 <- rename(classes21, MD_AT21 = MD_ALUNOTURMA)
+  classes22 <- rename(classes22, MD_AT22 = MD_ALUNOTURMA)
+  
+  rm(classes_hist)
+  # Unior as médias de turmas de 2018 a 2022
+  classes_hist <- merge(classes18, classes19, by = "COD_ESC")
+  classes_hist <- merge(classes_hist, classes20, by = "COD_ESC")
+  classes_hist <- merge(classes_hist, classes21, by = "COD_ESC")
+  classes_hist <- merge(classes_hist, classes22, by = "COD_ESC")
+  
+  classes_hist$MD_ATG <- round(((classes_hist$MD_AT18 + classes_hist$MD_AT18 +  classes_hist$MD_AT18 +  classes_hist$MD_AT18 +  classes_hist$MD_AT18)/5),2)
+  classes_hist <- classes_hist[, -c(2,3,4,5,6)]
+  
+  # Metodo antigo, fora do loop
+  # # separar por ano 
+  # classes18 <- classes15a20 %>% 
+  #   filter(
+  #     (ANO == "2018") &
+  #     (TIPOCLASSE == 0 | TIPOCLASSE == 18 | TIPOCLASSE == 17) &
+  #       (GRAU == 101 | GRAU == 2 | GRAU ==  5 | GRAU == 93 | GRAU == 98 | GRAU == 63 | GRAU == 76 | GRAU == 109 | GRAU == 104 | GRAU == 108 ) 
+  #   ) 
+  # 
+  # # remover colunas que não importam para a análise
+  # classes18<- classes18[, -c(3,4,5,6,7)]
+  # 
+  # # extraindo a média de alunos por classe por escola
+  # classes18 <- classes18 %>%
+  # group_by(COD_ESC) %>%
+  #   mutate(
+  #     TURMAS = n(),
+  #     T_ALUNOS = sum(QTDE_ALUNOS),
+  #     MD_ALUNOTURMA = round(T_ALUNOS/(n()),2)
+  # ) 
+  # 
+  # # remover colunas que não importam para a análise
+  # classes18<- classes18[, -c(1,3,4,5,6,7,8,9)]
+  # 
+  # classes18 <- classes18 %>%
+  #   distinct()
+  
+
+```
+
+### Criando uma função para fazer um merge recursivo e obter uma série histórica
+
+CodEscola \| Escola \| DE \| PEI \| AnoAdPEI \| %Cat \| %Forma \| IDESP16 \| IDESP 17 \| IDESP18 \| IDESP19 \| IDESP20 \| IDESP21 \| IDESP22 \| IDESP23
+
+\*avaliar mestres, doutores, licenciados e evolução
+
+```{r criar os datasets com os dados revelantes}
+
+  # carregar a lista de escolas
+  escolas <- read.csv("Escolas\\ESCOLAS.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
+  escolas <- rename(escolas, CODIGO_IE = CODESC)
+  
+  # manter apenas dados relevantes
+  escolas_all <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)] #analises de fatores não anuais
+  escolas2018 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2019 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2020 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2021 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2022 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2023 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  escolas2024 <- escolas[, -c(1,4,5,9,10,11,12,13,14,15,16,17,18,19,20,22)]
+  
+  # Período 2018 a 2022
+  escolas_all <- merge(escolas_all, indice_evolucao, by.x = "CODIGO_IE", by.y = "CODESC", all.x = TRUE, sort = FALSE)
+  escolas_all <- merge(escolas_all, idesp18, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  escolas_all <- merge(escolas_all, m_idesp18, by = "CODIGO_IE", sort = FALSE)
+  escolas_all <- escolas_all %>%
+    mutate(
+      M_ATING18 = ifelse(IDESP18 >= M_IDESP18, 1, 0),
+    )
+  escolas_all <- merge(escolas_all, idesp19, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  escolas_all <- merge(escolas_all, m_idesp19, by = "CODIGO_IE", sort = FALSE)
+  escolas_all <- escolas_all %>%
+    mutate(
+      M_ATING19 = ifelse(IDESP19 >= M_IDESP19, 1, 0),
+    )
+  escolas_all <- merge(escolas_all, idesp21, by = "CODIGO_IE", all.y = TRUE, sort = FALSE) # sem dados de 2020 sobre meta atingida, pandemia
+  escolas_all <- merge(escolas_all, m_idesp21, by = "CODIGO_IE", sort = FALSE)
+  escolas_all <- escolas_all %>%
+    mutate(
+      M_ATING21 = ifelse(IDESP21 >= M_IDESP21, 1, 0),
+    )
+  escolas_all <- merge(escolas_all, idesp22, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  escolas_all <- merge(escolas_all, m_idesp22, by = "CODIGO_IE", sort = FALSE)
+  escolas_all <- escolas_all %>%
+    mutate(
+      M_ATING22 = ifelse(IDESP22 >= M_IDESP22, 1, 0),
+    )
+  escolas_all <- escolas_all %>% 
+    mutate(
+      QT_M_ATING = (M_ATING18+ M_ATING19+ M_ATING21+ M_ATING22)
+    )
+  escolas_all <- escolas_all %>%
+    mutate(
+      PROFS = (INGRESSANTES + REGULARES + ABANDONOS + INTERMITENTES ),
+      IND_INGR = round((INGRESSANTES / PROFS * 100),2),
+      IND_REGU = round((REGULARES / PROFS * 100),2),
+      IND_ABAN = round((ABANDONOS / PROFS * 100),2),
+      IND_INTE = round((INTERMITENTES / PROFS * 100),2),
+    )
+  escolas_all <- merge(escolas_all, classes_hist, by.x = "CODIGO_IE", by.y = "COD_ESC", sort=FALSE)
+  esc_all_deep <- escolas_all[, -c(1,2,3,4,5,7,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26)]
+  esc_all_deep <- esc_all_deep %>% drop_na()
+  summary(esc_all_deep)
+  
+  # 2018
+  escolas2018$ANO <- 2018
+  escolas2018 <- merge(escolas2018, idesp17, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  escolas2018 <- merge(escolas2018, m_idesp17, by = "CODIGO_IE", sort = FALSE)
+  escolas2018 <- escolas2018 %>%
+    mutate(
+      M_ATING_AA = ifelse(IDESP17 >= M_IDESP17, 1, 0), # Meta atingida no ano anterior? Informação importante para política de bonus
+      DESV_META_AA = round((IDESP17 / M_IDESP17),2) # O quanto a meta foi atingida ou ultrapassada influencia o valor do bonus
+    )
+  escolas2018 <- merge(escolas2018, idesp18, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  escolas2018 <- merge(escolas2018, m_idesp18, by = "CODIGO_IE", sort = FALSE)
+  escolas2018 <- escolas2018 %>%
+    mutate(
+      M_ATING = ifelse(IDESP18 >= M_IDESP18, 1, 0),
+      DESV_META = round((IDESP18 / M_IDESP18),2)
+    )
+  escolas2018 <- merge(escolas2018, serv_uni2018, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  escolas2018 <- merge(escolas2018, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  escolas2018 <- merge(escolas2018, dados_ausencia2018, by.x = "CODIGO_IE", by.y = "CODESC", all.y = TRUE, sort = FALSE)
+  escolas2018 <- merge(escolas2018, escolas_pei_adesao, by.x = "CODIGO_IE", by.y = "CODESC", all.x = TRUE, sort = FALSE)
+  escolas2018 <- merge(escolas2018, classes18, by.x ="CODIGO_IE", by.y = "COD_ESC", all.x = TRUE, sort = FALSE)
+  escolas2018$ANO_ADESAO[is.na(escolas2018$ANO_ADESAO)]=3000
+  escolas2018 <- escolas2018 %>%
+    mutate(PEI = ifelse(ANO_ADESAO <= ANO, 1, 0))
+  escolas2018$PERC_AUSENCIA <- round(escolas2018$AUSENCIAS / ((escolas2018$PROFESSORES * 365) / 100), 2) 
+  escolas2018$PERC_FIXOS_TEMP <- ifelse (escolas2018$CAT_O != 0, round(100 - (escolas2018$CAT_O / ((escolas2018$CAT_A + escolas2018$CAT_F + escolas2018$CAT_P + escolas2018$CAT_N + escolas2018$CAT_O) /100)), 2) , 100) 
+  escolas2018 <- escolas2018[complete.cases(escolas2018), ]
+  
+  # escolas2018$DE
+  # s_escolas2018 <- summary(escolas2018)
+  # s_escolas2018$DE
+  
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2019$ANO <- 2019
+  # escolas2019 <- merge(escolas2019, idesp19, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # escolas2019 <- merge(escolas2019, m_idesp19, by = "CODIGO_IE", sort = FALSE)
+  # escolas2019 <- merge(escolas2019, serv_uni2019, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2019 <- merge(escolas2019, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2019 <- merge(escolas2019, dados_ausencia2019, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2019$PercAusencia <- round(escolas2019$Ausencias / ((escolas2019$Professores * 365) / 100), 2) 
+  # escolas2019$PercFixosVsTemp <- ifelse (escolas2019$CatO != 0, round(100 - (escolas2019$CatO / ((escolas2019$catA + escolas2019$CatF + escolas2019$CatP + escolas2019$CatN + escolas2019$CatO) /100)), 2) , 100) 
+  # 
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2020$ANO <- 2020
+  # #escolas2020 <- merge(escolas2020, idesp20, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # escolas2020 <- merge(escolas2020, m_idesp20, by = "CODIGO_IE", sort = FALSE)
+  # escolas2020 <- merge(escolas2020, serv_uni2020, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2020 <- merge(escolas2020, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2020 <- merge(escolas2020, dados_ausencia2020, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2020$PercAusencia <- round(escolas2020$Ausencias / ((escolas2020$Professores * 365) / 100), 2) 
+  # escolas2020$PercFixosVsTemp <- ifelse (escolas2020$CatO != 0, round(100 - (escolas2020$CatO / ((escolas2020$catA + escolas2020$CatF + escolas2020$CatP + escolas2020$CatN + escolas2020$CatO) /100)) , 100), 2) 
+  # 
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2021$ANO <- 2021
+  # escolas2021 <- merge(escolas2021, idesp21, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # escolas2021 <- merge(escolas2021, m_idesp21, by = "CODIGO_IE", sort = FALSE)
+  # escolas2021 <- merge(escolas2021, serv_uni2021, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2021 <- merge(escolas2021, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2021 <- merge(escolas2021, dados_ausencia2021, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2021$PercAusencia <- round(escolas2021$Ausencias / ((escolas2021$Professores * 365) / 100), 2) 
+  # escolas2021$PercFixosVsTemp <- ifelse (escolas2021$CatO != 0, round(100 - (escolas2021$CatO / ((escolas2021$catA + escolas2021$CatF + escolas2021$CatP + escolas2021$CatN + escolas2021$CatO) /100)) , 100), 2) 
+  #
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2022$ANO <- 2022
+  # escolas2022 <- merge(escolas2022, idesp22, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # escolas2022 <- merge(escolas2022, m_idesp22, by = "CODIGO_IE", sort = FALSE)
+  # escolas2022 <- merge(escolas2022, serv_uni2022, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2022 <- merge(escolas2022, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2022 <- merge(escolas2022, dados_ausencia2022, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2022$PercAusencia <- round(escolas2022$Ausencias / ((escolas2022$Professores * 365) / 100), 2)
+  # escolas2022$PercFixosVsTemp <- ifelse (escolas2022$CatO != 0, round(100 - (escolas2022$CatO / ((escolas2022$catA + escolas2022$CatF + escolas2022$CatP + escolas2022$CatN + escolas2022$CatO) /100)) , 100), 2)
+  #
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2023$ANO <- 2023
+  # #escolas2023 <- merge(escolas2023, idesp23, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # #escolas2023 <- merge(escolas2023, m_idesp23, by = "CODIGO_IE", sort = FALSE)
+  # escolas2023 <- merge(escolas2023, serv_uni2023, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2023 <- merge(escolas2023, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2023 <- merge(escolas2023, dados_ausencia2023, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2023$PercAusencia <- round(escolas2023$Ausencias / ((escolas2023$Professores * 365) / 100), 2) 
+  # escolas2023$PercFixosVsTemp <- ifelse (escolas2023$CatO != 0, round(100 - (escolas2023$CatO / ((escolas2023$catA + escolas2023$CatF + escolas2023$CatP + escolas2023$CatN + escolas2023$CatO) /100)) , 100), 2) 
+  # 
+  # # unir os dados filtrados nas outras tabelas
+  # escolas2024$ANO <- 2024
+  # #escolas2024 <- merge(escolas2024, idesp24, by = "CODIGO_IE", all.y = TRUE, sort = FALSE)
+  # #escolas2024 <- merge(escolas2024, m_idesp24, by = "CODIGO_IE", sort = FALSE)
+  # escolas2024 <- merge(escolas2024, serv_uni2024, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2024 <- merge(escolas2024, categ18, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2024 <- merge(escolas2024, dados_ausencia2024, by.x = "CODIGO_IE", by.y = "CODESC", sort = FALSE)
+  # escolas2024$PercAusencia <- round(escolas2024$Ausencias / ((escolas2024$Professores * 365) / 100), 2) 
+  # escolas2024$PercFixosVsTemp <- ifelse (escolas2024$CatO != 0, round(100 - (escolas2024$CatO / ((escolas2024$catA + escolas2024$CatF + escolas2024$CatP + escolas2024$CatN + escolas2024$CatO) /100)) , 100), 2) 
+
+  
+  
+
+```
+
+```{r gravando os dados em CSV para ficar mais prático de executar ao reabrir o R}
+  
+  #gravando um csv para não ter de carregar tudo novamente
+  write.csv(escolas2018, "Escolas/escolas2018.csv", row.names = FALSE)
+  write.csv(escolas2019, "Escolas/escolas2019.csv", row.names = FALSE)
+  write.csv(escolas2020, "Escolas/escolas2020.csv", row.names = FALSE)
+  write.csv(escolas2021, "Escolas/escolas2021.csv", row.names = FALSE)
+  write.csv(escolas2022, "Escolas/escolas2022.csv", row.names = FALSE)
+  write.csv(escolas2022, "Escolas/escolas2023.csv", row.names = FALSE)
+  write.csv(escolas2024, "Escolas/escolas2024.csv", row.names = FALSE)
+
+```
+
+```{r}
+
+  # Normalizando os dados
+  normalizar <- function(x) {
+    return ((x - min(x)) / (max(x) - min(x)))
+  }
+
+  # dados de treino e teste
+  set.seed(123)  # Para reprodutibilidade
+  train_index_all <- sample(1:nrow(esc_all_deep), 0.8 * nrow(esc_all_deep))
+  train_data_all <- esc_all_deep[train_index_all, ]
+  test_data_all <- esc_all_deep[-train_index_all, ]
+
+  # Modelo de rede neural para regressão
+  model_all <- keras_model_sequential() %>%
+    layer_dense(units = 128, activation = 'relu', input_shape = c(ncol(train_data_all) - 1)) %>%
+    #layer_dense(units = 64, activation = 'relu') %>%
+    #layer_dense(units = 16, activation = 'relu') %>%
+    layer_dense(units = 1, activation = 'linear')  # Saída contínua para prever um número de 0 a 4
+  
+  model_all %>% compile(
+    loss = 'mean_squared_error',  # Função de perda para regressão
+    optimizer = 'adam',
+    metrics = c('mean_absolute_error')  # Métrica adequada para regressão
+  )
+  
+  # Treino do modelo
+  history_all <- model_all %>% fit(
+    as.matrix(train_data_all[, -which(names(train_data_all) == "QT_M_ATING")]),  # Previsores
+    as.matrix(train_data_all$QT_M_ATING),  # Variável alvo
+    epochs = 150,
+    batch_size = 32,
+    validation_split = 0.2
+  )
+  
+  # avaliar desempenho do modelo
+  model_all %>% evaluate(as.matrix(test_data_all[, -which(names(test_data_all) == "QT_M_ATING")]), 
+                   as.matrix(test_data_all$QT_M_ATING))
+  
+  # tf 2.6
+  predictions_all <- model_all %>% predict(as.matrix(test_data_all[, -which(names(test_data_all) == "QT_M_ATING")])) %>% `>`(0.5) %>% k_cast("int32")
+  
+  # Função preditora para DALEX
+  predict_fun_all <- function(model_all, newdata) {
+    preds_all <- model_all %>% predict(as.matrix(newdata))
+    return(as.numeric(preds_all))
+  }
+  
+  # Criar o explainer
+  explainer <- explain(
+    model = model_all,
+    data = test_data_all[, -which(names(test_data_all) == "QT_M_ATING")],
+    y = test_data_all$QT_M_ATING,
+    predict_function = predict_fun_all,
+    label = "Rede Neural"
+  )
+  
+  # Importância por Permutação
+  vi_permutation <- model_parts(explainer, loss_function = loss_crossentropy)
+  plot(vi_permutation)
+  
+  # Valores de SHAP
+  shap_values <- shap(explainer, new_observation = test_data_all[, -which(names(test_data_all) == "QT_M_ATING")])
+  plot(shap_values)
+  
+```
+
+
+```{r algoritmo para verificar pesos de cada uma das features}
+
+  # Normalizando os dados
+  normalizar <- function(x) {
+    return ((x - min(x)) / (max(x) - min(x)))
+  }
+
+  # manter só as colunas estritamente relevantes para o modelo
+  esc2018_deep <- escolas2018[, -c(1,2,3,4,5,7,8,9,11,12,13,15,16,19,20,21,22,23,24,25,26,27,28,29,31,32)] # 2 DE, 29 P_MD
+
+  esc2018_deep <- esc2018_deep %>%
+    #mutate(DE = as.numeric(as.factor(DE))) #%>% # Converte DE para numérico se necessário 
+    mutate(across(c( ALE, MD_ANOS_C, MD_IDADE, P_POSGRAD, PEI, PERC_AUSENCIA, PERC_FIXOS_TEMP, MD_ALUNOTURMA, M_ATING_AA), normalizar))
+    
+  #esc2018_deep <- dummy_cols(esc2018_deep, select_columns = "DE", remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+  
+  set.seed(123)  # Para reprodutibilidade
+  train_index <- sample(1:nrow(esc2018_deep), 0.8 * nrow(esc2018_deep))
+  train_data <- esc2018_deep[train_index, ]
+  test_data <- esc2018_deep[-train_index, ]
+  
+  # modelo de rede 
+  model <- keras_model_sequential() %>%
+  layer_dense(units = 12, activation = 'relu', input_shape = c(ncol(train_data) - 1)) %>%
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'sigmoid')  # Saída binária para prever 0 ou 1 - se atingiu a meta ou não
+
+  model %>% compile(
+    loss = 'binary_crossentropy',  # Porque estamos prevendo uma classe binária
+    optimizer = 'adam',
+    metrics = c('accuracy')
+  )
+
+  # treino do modelo
+  history <- model %>% fit(
+    as.matrix(train_data[, -which(names(train_data) == "M_ATING")]),  # Previsores
+    as.matrix(train_data$M_ATING),  # Variável alvo
+    epochs = 100,
+    batch_size = 64,
+    validation_split = 0.2
+  )
+  
+  # avaliar desempenho do modelo
+  model %>% evaluate(as.matrix(test_data[, -which(names(test_data) == "M_ATING")]), 
+                   as.matrix(test_data$M_ATING))
+  
+  # tf 2.5
+  # predictions <- model %>% predict_classes(as.matrix(test_data[, -which(names(test_data) == "M_ATING")]))
+  
+  # tf 2.6
+  predictions <- model %>% predict(as.matrix(test_data[, -which(names(test_data) == "M_ATING")])) %>% `>`(0.5) %>% k_cast("int32")
+  
+  # Comparar com os valores reais
+  real <- test_data$M_ATING
+  
+  # Convertendo para vetor, se necessário
+  predictions <- as.vector(predictions)
+  
+  # Gerando a matriz de confusão
+  matriz_conf18 <- table(PREVISÃO = predictions, REAL = real)
+  print(matriz_conf18)
+  
+  
+  # Obter os pesos da primeira camada densa
+  pesos <- model %>% get_weights()
+  
+  # A primeira camada contém os pesos para cada uma das features
+  pesos[[1]]  # Pesos entre as features de entrada e a primeira camada densa
+  
+```
