@@ -1,36 +1,19 @@
 ```{r instalar e carregar pacotes}
   # instalação de pacotes
-  # install.packages(c("DALEX", "vip", "shapper", "tidyverse", "lubridate", "janitor", "dplyr", "xlsx", "stringr", "tidyr", "plotly", "keras", "fastDummies", "tensorflow", "equatiomatic", "kableExtra", "stargazer", "caret", "ROCR", "pROC"))
-  # install.packages("neuralnet")  
-  # install.packages("pROC")
-  #library("keras")
-  #library("tensorflow")
-  
-  library("pROC")
-  library("ROCR")
-  library("caret")
-  library("stargazer")
-  library("kableExtra")
-  library("equatiomatic")
-  library("neuralnet")
-  library("DALEX")
-  library("vip")
-  library("shapper")
-  library("fastDummies")
-  library("keras")
-  library("tidyr")
-  library("lubridate")
-  library("ggplot2")
-  library("janitor")
-  library("knitr")
-  library("dplyr")
-  library("xlsx")
-  library("stringr")
-  library("plotly")
 
-  # mudei o ambiente do python via preferencias globais do RStudio - no caso coloquei num ambiente virtual   
-  # install_tensorflow()
-  # install_keras()
+  pacotes <- c("DALEX", "vip", "shapper", "tidyverse", "lubridate", "janitor", "dplyr", "xlsx", "stringr", "tidyr", "plotly", "keras", "fastDummies", "tensorflow", "equatiomatic", "kableExtra", "stargazer", "caret", "ROCR", "pROC")
+
+  if(sum(as.numeric(!pacotes %in% installed.packages())) != 0){
+    instalador <- pacotes[!pacotes %in% installed.packages()]
+    for(i in 1:length(instalador)) {
+      install.packages(instalador, dependencies = T)
+      break()}
+    sapply(pacotes, require, character = T) 
+  } else {
+    sapply(pacotes, require, character = T) 
+  }
+
+  # Tensorflow - mudei o ambiente do python via preferencias globais do RStudio - no caso coloquei num ambiente virtual   
 ```
 
 Carregar as diversas tabelas, a intenção é criar um dataset único com todos os dados que precisamos
@@ -80,21 +63,67 @@ Vale lembrar que os datasets do governo são mensais, mas aqui vamos selecionar 
   idesp21 <- idesp21[!(is.na(idesp21$IDESP21) | idesp21$IDESP21==""), ]
   idesp22 <- idesp22[!(is.na(idesp22$IDESP22) | idesp22$IDESP22==""), ]
   
-  # transformando a coluna IDESP em numerica ao inves de fatores
-  idesp17 <- idesp17 %>%
-    mutate(IDESP17 = as.numeric(gsub(",", "", as.character(idesp17$IDESP17)))/100)
-  idesp18 <- idesp18 %>%
-    mutate(IDESP18 = as.numeric(gsub(",", "", as.character(idesp18$IDESP18)))/100)
-  idesp19 <- idesp19 %>%
-    mutate(IDESP19 = as.numeric(gsub(",", "", as.character(idesp19$IDESP19)))/100)
-  # idesp20 <- idesp20 %>%
-  #   mutate(IDESP20 = as.character(idesp20$IDESP20)) # não realizado por conta da pandemia
-  idesp21 <- idesp21 %>%
-    mutate(IDESP21 = as.numeric(gsub(",", "", as.character(idesp21$IDESP21)))/100)
+  # Função para converter colunas com dados do tipo fator para numérico
+  convert_factor_to_numeric <- function(df) {
+    colunas <- grep("IDESP", names(df), value = TRUE) # Identificar colunas com "IDESP" no nome
+      for (col in colunas) {
+        if (is.factor(df[[col]]) || is.character(df[[col]])) {
+          
+          valor_str <- as.character(df[[col]]) # Converte o valor para string
+          valor <- as.numeric(gsub(",", "", valor_str)) # Remove vírgulas
+          casas_decimais <- nchar(sub(".*,", "", valor_str)) # Conta o número de casas decimais
+          
+          # Aplica a lógica condicional para divisão conforme o número de casas decimais
+          df[[col]] <- ifelse(
+            grepl(",", valor_str), # Verifica se contém vírgula
+            ifelse(casas_decimais == 1, valor / 10,
+                   ifelse(casas_decimais == 2, valor / 100, valor)),
+            valor # Mantém o valor original se não houver vírgula
+          )
+        }
+        
+        # Tratamento da coluna CODESC
+        if ("CODESC" %in% names(df)) { # Verifica se a coluna CODESC existe
+          if (!is.integer(df$CODESC)) { # Se não for fator, converte
+            df$CODESC <- as.integer(as.character(df$CODESC))
+          }
+        }
+      }
+      return(df)
+  }
   
-  # str(idesp22)
-  # idesp22 <- idesp22 %>%
-  #   mutate(IDESP22 = as.numeric(gsub(",", "", as.character(idesp22$IDESP22))))
+  # Aplicar a função em todos os dataframes de interesse
+  idesp17 <- convert_factor_to_numeric(idesp17)
+  idesp18 <- convert_factor_to_numeric(idesp18)
+  idesp19 <- convert_factor_to_numeric(idesp19)
+  idesp21 <- convert_factor_to_numeric(idesp21)
+  idesp22 <- convert_factor_to_numeric(idesp22)
+  
+  # janitor::compare_df_cols(idesp17, 
+  #                          idesp18,
+  #                          idesp19,
+  #                          idesp21,
+  #                          idesp22)
+  
+  # Código da versão 1.0.0
+  # # transformando a coluna IDESP em numerica ao inves de fatores
+  # idesp17 <- idesp17 %>%
+  #   mutate(IDESP17 = as.numeric(gsub(",", "", as.character(idesp17$IDESP17)))/100)
+  
+  # Código da versão 1.0.1 - Evita problemas quando os valores são inteiros ou tem apenas uma casa decimal
+  # idesp17 <- idesp17 %>%
+  # mutate(across(starts_with("X20"), ~ {
+  #   valor_str <- as.character(.)
+  #   valor <- as.numeric(gsub(",", "", valor_str))
+  #   casas_decimais <- nchar(sub(".*,", "", valor_str))  # Conta o número de casas após a vírgula
+  #   
+  #   # Aplica a condição para dividir conforme o número de casas decimais
+  #   ifelse(grepl(",", valor_str),  # Verifica se o valor original contém vírgula
+  #          ifelse(casas_decimais == 1, valor / 10,
+  #                 ifelse(casas_decimais == 2, valor / 100, valor)),
+  #          valor)  # Mantém o valor original se não houver vírgula
+  # }))
+
   
 ```
 
@@ -134,25 +163,42 @@ Vale lembrar que os datasets do governo são mensais, mas aqui vamos selecionar 
   m_idesp21 <- m_idesp21[!(is.na(m_idesp21$M_IDESP21) | m_idesp21$M_IDESP21==""), ]
   m_idesp22 <- m_idesp22[!(is.na(m_idesp22$M_IDESP22) | m_idesp22$M_IDESP22==""), ]
   
-  # transformando a coluna M_IDESP em numerica ao inves de fatores
-  m_idesp17 <- m_idesp17 %>%
-    mutate(M_IDESP17 = as.numeric(gsub(",", "", as.character(m_idesp17$M_IDESP17)))/100)
-  m_idesp18 <- m_idesp18 %>%
-    mutate(M_IDESP18 = as.numeric(gsub(",", "", as.character(m_idesp18$M_IDESP18)))/100)
-  m_idesp19 <- m_idesp19 %>%
-    mutate(M_IDESP19 = as.numeric(gsub(",", "", as.character(m_idesp19$M_IDESP19))))
-  m_idesp20 <- m_idesp20 %>%
-    mutate(M_IDESP20 = as.numeric(gsub(",", "", as.character(m_idesp20$M_IDESP20)))/100)
-  m_idesp21 <- m_idesp21 %>%
-    mutate(M_IDESP21 = as.numeric(gsub(",", "", as.character(m_idesp21$M_IDESP21)))/100)
-  m_idesp22 <- m_idesp22 %>%
-    mutate(M_IDESP22 = as.numeric(gsub(",", "", as.character(m_idesp22$M_IDESP22)))/100)
-  # m_idesp23 <- m_idesp23 %>%
-  #   mutate(M_IDESP18 = as.character(m_idesp18$M_IDESP18)) # ainda não divulgado
+  # Aplicar a função em todos os dataframes de interesse
+  m_idesp17 <- convert_factor_to_numeric(m_idesp17)
+  m_idesp18 <- convert_factor_to_numeric(m_idesp18)
+  m_idesp19 <- convert_factor_to_numeric(m_idesp19)
+  m_idesp20 <- convert_factor_to_numeric(m_idesp20)
+  m_idesp21 <- convert_factor_to_numeric(m_idesp21)
+  m_idesp22 <- convert_factor_to_numeric(m_idesp22)
+  
+  janitor::compare_df_cols(m_idesp17, 
+                           m_idesp18,
+                           m_idesp19,
+                           m_idesp20,
+                           m_idesp21,
+                           m_idesp22)
+     
+  # Código da versão 1.0.0
+  # # transformando a coluna M_IDESP em numerica ao inves de fatores
+  # m_idesp17 <- m_idesp17 %>%
+  #   mutate(M_IDESP17 = as.numeric(gsub(",", "", as.character(m_idesp17$M_IDESP17)))/100)
+  # m_idesp18 <- m_idesp18 %>%
+  #   mutate(M_IDESP18 = as.numeric(gsub(",", "", as.character(m_idesp18$M_IDESP18)))/100)
+  # m_idesp19 <- m_idesp19 %>%
+  #   mutate(M_IDESP19 = as.numeric(gsub(",", "", as.character(m_idesp19$M_IDESP19))))
+  # m_idesp20 <- m_idesp20 %>%
+  #   mutate(M_IDESP20 = as.numeric(gsub(",", "", as.character(m_idesp20$M_IDESP20)))/100)
+  # m_idesp21 <- m_idesp21 %>%
+  #   mutate(M_IDESP21 = as.numeric(gsub(",", "", as.character(m_idesp21$M_IDESP21)))/100)
+  # m_idesp22 <- m_idesp22 %>%
+  #   mutate(M_IDESP22 = as.numeric(gsub(",", "", as.character(m_idesp22$M_IDESP22)))/100)
+  # # m_idesp23 <- m_idesp23 %>%
+  # #   mutate(M_IDESP18 = as.character(m_idesp18$M_IDESP18)) # ainda não divulgado
+  
   
 ```
 
-Algumas das tabelas tem só o código administrativo ao invés do código da escola, então criei uma tabela com esses dois códigos para poder inserir o código da escola nas tabelas que não tiverem, isso fará que o merge entre tabelas seja facilitrado futuramente
+Algumas das tabelas tem só o código administrativo ao invés do código da escola, então criei uma tabela com esses dois códigos para poder inserir o código da escola nas tabelas que não tiverem, isso fará que o merge entre tabelas seja facilitado futuramente
 
 ```{r Escolas}
   
@@ -183,7 +229,6 @@ Algumas das tabelas tem só o código administrativo ao invés do código da esc
   # ESCOLAS PEI
   # arquivo com escolas PEI
   escolas_pei <- read.xlsx2("PEI\\ESCOLAS_PEI_2024.xlsx", 1, header=TRUE)
-  
   
   # ESCOLAS
   escolas <- read.csv("Escolas\\ESCOLAS.csv", header=TRUE, sep = ";", stringsAsFactors=TRUE)
